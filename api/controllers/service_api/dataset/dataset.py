@@ -54,7 +54,7 @@ class DatasetCreatePayload(BaseModel):
     retrieval_model: RetrievalModel | None = None
     embedding_model: str | None = None
     embedding_model_provider: str | None = None
-    summary_index_setting: dict | None = None
+    summary_index_setting: dict[str, Any] | None = None
 
 
 class DatasetUpdatePayload(BaseModel):

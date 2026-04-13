@@ -1,3 +1,5 @@
+from typing import Any
+
 from flask_restx import (  # type: ignore
     Resource,  # type: ignore
 )
@@ -16,7 +18,7 @@ DEFAULT_REF_TEMPLATE_SWAGGER_2_0 = "#/definitions/{model}"
 
 
 class Parser(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     datasource_type: str
     credential_id: str | None = None
 

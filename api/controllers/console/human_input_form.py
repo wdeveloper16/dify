@@ -5,6 +5,7 @@ Console/Studio Human Input Form APIs.
 import json
 import logging
 from collections.abc import Generator
+from typing import Any
 
 from flask import Response, jsonify, request
 from flask_restx import Resource
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class HumanInputFormSubmitPayload(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     action: str
 
 

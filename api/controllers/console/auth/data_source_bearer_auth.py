@@ -1,3 +1,5 @@
+from typing import Any
+
 from flask_restx import Resource
 from pydantic import BaseModel, Field
 
@@ -14,7 +16,7 @@ DEFAULT_REF_TEMPLATE_SWAGGER_2_0 = "#/definitions/{model}"
 class ApiKeyAuthBindingPayload(BaseModel):
     category: str = Field(...)
     provider: str = Field(...)
-    credentials: dict = Field(...)
+    credentials: dict[str, Any] = Field(...)
 
 
 console_ns.schema_model(

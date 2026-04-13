@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class HumanInputFormSubmitPayload(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     action: str
 
 
@@ -68,7 +68,7 @@ class FormDefinitionPayload(TypedDict):
     site: NotRequired[dict]
 
 
-def _jsonify_form_definition(form: Form, site_payload: dict | None = None) -> Response:
+def _jsonify_form_definition(form: Form, site_payload: dict[str, Any] | None = None) -> Response:
     """Return the form payload (optionally with site) as a JSON response."""
     definition_payload = form.get_definition().model_dump()
     payload: FormDefinitionPayload = {

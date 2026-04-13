@@ -125,12 +125,12 @@ DEFAULT_REF_TEMPLATE_SWAGGER_2_0 = "#/definitions/{model}"
 
 
 class WorkflowRunRequest(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     files: list | None = None
 
 
 class ChatRequest(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     query: str
     files: list | None = None
     conversation_id: str | None = None
@@ -146,7 +146,7 @@ class TextToSpeechRequest(BaseModel):
 
 
 class CompletionRequest(BaseModel):
-    inputs: dict
+    inputs: dict[str, Any]
     query: str = ""
     files: list | None = None
     response_mode: Literal["blocking", "streaming"] | None = None
