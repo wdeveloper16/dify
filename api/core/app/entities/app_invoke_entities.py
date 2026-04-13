@@ -245,7 +245,7 @@ class WorkflowAppGenerateEntity(AppGenerateEntity):
         """
 
         node_id: str
-        inputs: dict
+        inputs: dict[str, Any]
 
     single_iteration_run: SingleIterationRunEntity | None = None
 
@@ -255,7 +255,7 @@ class WorkflowAppGenerateEntity(AppGenerateEntity):
         """
 
         node_id: str
-        inputs: dict
+        inputs: dict[str, Any]
 
     single_loop_run: SingleLoopRunEntity | None = None
 

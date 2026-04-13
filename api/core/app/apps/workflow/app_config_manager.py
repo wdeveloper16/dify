@@ -1,3 +1,5 @@
+from typing import Any
+
 from core.app.app_config.base_app_config_manager import BaseAppConfigManager
 from core.app.app_config.common.sensitive_word_avoidance.manager import SensitiveWordAvoidanceConfigManager
 from core.app.app_config.entities import WorkflowUIBasedAppConfig
@@ -35,7 +37,7 @@ class WorkflowAppConfigManager(BaseAppConfigManager):
         return app_config
 
     @classmethod
-    def config_validate(cls, tenant_id: str, config: dict, only_structure_validate: bool = False):
+    def config_validate(cls, tenant_id: str, config: dict[str, Any], only_structure_validate: bool = False):
         """
         Validate for workflow app model config
 
