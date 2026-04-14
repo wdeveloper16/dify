@@ -1,6 +1,7 @@
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from core.ops.entities.config_entity import BaseTracingConfig
 from core.ops.ops_trace_manager import OpsTraceManager, TracingProviderConfigEntry, provider_config_map
@@ -17,20 +18,22 @@ class OpsService:
         :param tracing_provider: tracing provider
         :return:
         """
-        trace_config_data: TraceAppConfig | None = db.session.scalar(
-            select(TraceAppConfig)
-            .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
-            .limit(1)
-        )
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            trace_config_data: TraceAppConfig | None = session.scalar(
+                select(TraceAppConfig)
+                .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
+                .limit(1)
+            )
 
-        if not trace_config_data:
-            return None
+            if not trace_config_data:
+                return None
 
-        # decrypt_token and obfuscated_token
-        app = db.session.get(App, app_id)
-        if not app:
-            return None
-        tenant_id = app.tenant_id
+            # decrypt_token and obfuscated_token
+            app = session.get(App, app_id)
+            if not app:
+                return None
+            tenant_id = app.tenant_id
+
         if trace_config_data.tracing_config is None:
             raise ValueError("Tracing config cannot be None.")
         decrypt_tracing_config = OpsTraceManager.decrypt_tracing_config(
@@ -183,31 +186,31 @@ class OpsService:
         else:
             project_url = None
 
-        # check if trace config already exists
-        trace_config_data: TraceAppConfig | None = db.session.scalar(
-            select(TraceAppConfig)
-            .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
-            .limit(1)
-        )
+        with sessionmaker(bind=db.engine).begin() as session:
+            # check if trace config already exists
+            trace_config_data: TraceAppConfig | None = session.scalar(
+                select(TraceAppConfig)
+                .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
+                .limit(1)
+            )
 
-        if trace_config_data:
-            return None
+            if trace_config_data:
+                return None
 
-        # get tenant id
-        app = db.session.get(App, app_id)
-        if not app:
-            return None
-        tenant_id = app.tenant_id
-        tracing_config = OpsTraceManager.encrypt_tracing_config(tenant_id, tracing_provider, tracing_config)
-        if project_url:
-            tracing_config["project_url"] = project_url
-        trace_config_data = TraceAppConfig(
-            app_id=app_id,
-            tracing_provider=tracing_provider,
-            tracing_config=tracing_config,
-        )
-        db.session.add(trace_config_data)
-        db.session.commit()
+            # get tenant id
+            app = session.get(App, app_id)
+            if not app:
+                return None
+            tenant_id = app.tenant_id
+            tracing_config = OpsTraceManager.encrypt_tracing_config(tenant_id, tracing_provider, tracing_config)
+            if project_url:
+                tracing_config["project_url"] = project_url
+            trace_config_data = TraceAppConfig(
+                app_id=app_id,
+                tracing_provider=tracing_provider,
+                tracing_config=tracing_config,
+            )
+            session.add(trace_config_data)
 
         return {"result": "success"}
 
@@ -225,33 +228,35 @@ class OpsService:
         except KeyError:
             raise ValueError(f"Invalid tracing provider: {tracing_provider}")
 
-        # check if trace config already exists
-        current_trace_config = db.session.scalar(
-            select(TraceAppConfig)
-            .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
-            .limit(1)
-        )
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            # check if trace config already exists
+            current_trace_config = session.scalar(
+                select(TraceAppConfig)
+                .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
+                .limit(1)
+            )
 
-        if not current_trace_config:
-            return None
+            if not current_trace_config:
+                return None
 
-        # get tenant id
-        app = db.session.get(App, app_id)
-        if not app:
-            return None
-        tenant_id = app.tenant_id
-        tracing_config = OpsTraceManager.encrypt_tracing_config(
-            tenant_id, tracing_provider, tracing_config, current_trace_config.tracing_config
-        )
+            # get tenant id
+            app = session.get(App, app_id)
+            if not app:
+                return None
+            tenant_id = app.tenant_id
+            tracing_config = OpsTraceManager.encrypt_tracing_config(
+                tenant_id, tracing_provider, tracing_config, current_trace_config.tracing_config
+            )
 
-        # api check
-        # decrypt_token
-        decrypt_tracing_config = OpsTraceManager.decrypt_tracing_config(tenant_id, tracing_provider, tracing_config)
-        if not OpsTraceManager.check_trace_config_is_effective(decrypt_tracing_config, tracing_provider):
-            raise ValueError("Invalid Credentials")
+            # api check
+            # decrypt_token
+            decrypt_tracing_config = OpsTraceManager.decrypt_tracing_config(
+                tenant_id, tracing_provider, tracing_config
+            )
+            if not OpsTraceManager.check_trace_config_is_effective(decrypt_tracing_config, tracing_provider):
+                raise ValueError("Invalid Credentials")
 
-        current_trace_config.tracing_config = tracing_config
-        db.session.commit()
+            current_trace_config.tracing_config = tracing_config
 
         return current_trace_config.to_dict()
 
@@ -263,16 +268,16 @@ class OpsService:
         :param tracing_provider: tracing provider
         :return:
         """
-        trace_config = db.session.scalar(
-            select(TraceAppConfig)
-            .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
-            .limit(1)
-        )
+        with sessionmaker(bind=db.engine).begin() as session:
+            trace_config = session.scalar(
+                select(TraceAppConfig)
+                .where(TraceAppConfig.app_id == app_id, TraceAppConfig.tracing_provider == tracing_provider)
+                .limit(1)
+            )
 
-        if not trace_config:
-            return None
+            if not trace_config:
+                return None
 
-        db.session.delete(trace_config)
-        db.session.commit()
+            session.delete(trace_config)
 
         return True

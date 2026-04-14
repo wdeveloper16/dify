@@ -74,31 +74,32 @@ class MessageService:
 
         fetch_limit = limit + 1
 
-        if first_id:
-            first_message = db.session.scalar(
-                select(Message).where(Message.conversation_id == conversation.id, Message.id == first_id).limit(1)
-            )
-
-            if not first_message:
-                raise FirstMessageNotExistsError()
-
-            history_messages = db.session.scalars(
-                select(Message)
-                .where(
-                    Message.conversation_id == conversation.id,
-                    Message.created_at < first_message.created_at,
-                    Message.id != first_message.id,
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            if first_id:
+                first_message = session.scalar(
+                    select(Message).where(Message.conversation_id == conversation.id, Message.id == first_id).limit(1)
                 )
-                .order_by(Message.created_at.desc())
-                .limit(fetch_limit)
-            ).all()
-        else:
-            history_messages = db.session.scalars(
-                select(Message)
-                .where(Message.conversation_id == conversation.id)
-                .order_by(Message.created_at.desc())
-                .limit(fetch_limit)
-            ).all()
+
+                if not first_message:
+                    raise FirstMessageNotExistsError()
+
+                history_messages = session.scalars(
+                    select(Message)
+                    .where(
+                        Message.conversation_id == conversation.id,
+                        Message.created_at < first_message.created_at,
+                        Message.id != first_message.id,
+                    )
+                    .order_by(Message.created_at.desc())
+                    .limit(fetch_limit)
+                ).all()
+            else:
+                history_messages = session.scalars(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.desc())
+                    .limit(fetch_limit)
+                ).all()
 
         has_more = False
         if len(history_messages) > limit:
@@ -142,19 +143,22 @@ class MessageService:
                 return InfiniteScrollPagination(data=[], limit=limit, has_more=False)
             stmt = stmt.where(Message.id.in_(include_ids))
 
-        if last_id:
-            last_message = db.session.scalar(stmt.where(Message.id == last_id).limit(1))
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            if last_id:
+                last_message = session.scalar(stmt.where(Message.id == last_id).limit(1))
 
-            if not last_message:
-                raise LastMessageNotExistsError()
+                if not last_message:
+                    raise LastMessageNotExistsError()
 
-            history_messages = db.session.scalars(
-                stmt.where(Message.created_at < last_message.created_at, Message.id != last_message.id)
-                .order_by(Message.created_at.desc())
-                .limit(fetch_limit)
-            ).all()
-        else:
-            history_messages = db.session.scalars(stmt.order_by(Message.created_at.desc()).limit(fetch_limit)).all()
+                history_messages = session.scalars(
+                    stmt.where(Message.created_at < last_message.created_at, Message.id != last_message.id)
+                    .order_by(Message.created_at.desc())
+                    .limit(fetch_limit)
+                ).all()
+            else:
+                history_messages = session.scalars(
+                    stmt.order_by(Message.created_at.desc()).limit(fetch_limit)
+                ).all()
 
         has_more = False
         if len(history_messages) > limit:
@@ -176,32 +180,43 @@ class MessageService:
         if not user:
             raise ValueError("user cannot be None")
 
-        message = cls.get_message(app_model=app_model, user=user, message_id=message_id)
-
-        feedback = message.user_feedback if isinstance(user, EndUser) else message.admin_feedback
-
-        if not rating and feedback:
-            db.session.delete(feedback)
-        elif rating and feedback:
-            feedback.rating = rating
-            feedback.content = content
-        elif not rating and not feedback:
-            raise ValueError("rating cannot be None when feedback not exists")
-        else:
-            assert rating is not None
-            feedback = MessageFeedback(
-                app_id=app_model.id,
-                conversation_id=message.conversation_id,
-                message_id=message.id,
-                rating=rating,
-                content=content,
-                from_source=(FeedbackFromSource.USER if isinstance(user, EndUser) else FeedbackFromSource.ADMIN),
-                from_end_user_id=(user.id if isinstance(user, EndUser) else None),
-                from_account_id=(user.id if isinstance(user, Account) else None),
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            message = session.scalar(
+                select(Message)
+                .where(
+                    Message.id == message_id,
+                    Message.app_id == app_model.id,
+                    Message.from_source == ("api" if isinstance(user, EndUser) else "console"),
+                    Message.from_end_user_id == (user.id if isinstance(user, EndUser) else None),
+                    Message.from_account_id == (user.id if isinstance(user, Account) else None),
+                )
+                .limit(1)
             )
-            db.session.add(feedback)
+            if not message:
+                raise MessageNotExistsError()
 
-        db.session.commit()
+            feedback = message.user_feedback if isinstance(user, EndUser) else message.admin_feedback
+
+            if not rating and feedback:
+                session.delete(feedback)
+            elif rating and feedback:
+                feedback.rating = rating
+                feedback.content = content
+            elif not rating and not feedback:
+                raise ValueError("rating cannot be None when feedback not exists")
+            else:
+                assert rating is not None
+                feedback = MessageFeedback(
+                    app_id=app_model.id,
+                    conversation_id=message.conversation_id,
+                    message_id=message.id,
+                    rating=rating,
+                    content=content,
+                    from_source=(FeedbackFromSource.USER if isinstance(user, EndUser) else FeedbackFromSource.ADMIN),
+                    from_end_user_id=(user.id if isinstance(user, EndUser) else None),
+                    from_account_id=(user.id if isinstance(user, Account) else None),
+                )
+                session.add(feedback)
 
         return feedback
 
@@ -209,29 +224,30 @@ class MessageService:
     def get_all_messages_feedbacks(cls, app_model: App, page: int, limit: int):
         """Get all feedbacks of an app"""
         offset = (page - 1) * limit
-        feedbacks = db.session.scalars(
-            select(MessageFeedback)
-            .where(MessageFeedback.app_id == app_model.id)
-            .order_by(MessageFeedback.created_at.desc(), MessageFeedback.id.desc())
-            .limit(limit)
-            .offset(offset)
-        ).all()
-
-        return [record.to_dict() for record in feedbacks]
+        with sessionmaker(bind=db.engine).begin() as session:
+            feedbacks = session.scalars(
+                select(MessageFeedback)
+                .where(MessageFeedback.app_id == app_model.id)
+                .order_by(MessageFeedback.created_at.desc(), MessageFeedback.id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [record.to_dict() for record in feedbacks]
 
     @classmethod
     def get_message(cls, app_model: App, user: Account | EndUser | None, message_id: str):
-        message = db.session.scalar(
-            select(Message)
-            .where(
-                Message.id == message_id,
-                Message.app_id == app_model.id,
-                Message.from_source == ("api" if isinstance(user, EndUser) else "console"),
-                Message.from_end_user_id == (user.id if isinstance(user, EndUser) else None),
-                Message.from_account_id == (user.id if isinstance(user, Account) else None),
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            message = session.scalar(
+                select(Message)
+                .where(
+                    Message.id == message_id,
+                    Message.app_id == app_model.id,
+                    Message.from_source == ("api" if isinstance(user, EndUser) else "console"),
+                    Message.from_end_user_id == (user.id if isinstance(user, EndUser) else None),
+                    Message.from_account_id == (user.id if isinstance(user, Account) else None),
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
 
         if not message:
             raise MessageNotExistsError()
@@ -276,11 +292,15 @@ class MessageService:
             )
         else:
             if not conversation.override_model_configs:
-                app_model_config = db.session.scalar(
-                    select(AppModelConfig)
-                    .where(AppModelConfig.id == conversation.app_model_config_id, AppModelConfig.app_id == app_model.id)
-                    .limit(1)
-                )
+                with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+                    app_model_config = session.scalar(
+                        select(AppModelConfig)
+                        .where(
+                            AppModelConfig.id == conversation.app_model_config_id,
+                            AppModelConfig.app_id == app_model.id,
+                        )
+                        .limit(1)
+                    )
             else:
                 conversation_override_model_configs = _app_model_config_adapter.validate_json(
                     conversation.override_model_configs
