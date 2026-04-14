@@ -5,7 +5,7 @@ from typing import Any
 
 from graphon.variables.types import SegmentType
 from sqlalchemy import asc, desc, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from configs import dify_config
 from core.app.entities.app_invoke_entities import InvokeFrom
@@ -128,21 +128,23 @@ class ConversationService:
         if auto_generate:
             return cls.auto_generate_name(app_model, conversation)
         else:
-            conversation.name = name
-            conversation.updated_at = naive_utc_now()
-            db.session.commit()
+            with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+                conversation = session.merge(conversation)
+                conversation.name = name
+                conversation.updated_at = naive_utc_now()
 
         return conversation
 
     @classmethod
     def auto_generate_name(cls, app_model: App, conversation: Conversation):
         # get conversation first message
-        message = db.session.scalar(
-            select(Message)
-            .where(Message.app_id == app_model.id, Message.conversation_id == conversation.id)
-            .order_by(Message.created_at.asc())
-            .limit(1)
-        )
+        with sessionmaker(bind=db.engine).begin() as session:
+            message = session.scalar(
+                select(Message)
+                .where(Message.app_id == app_model.id, Message.conversation_id == conversation.id)
+                .order_by(Message.created_at.asc())
+                .limit(1)
+            )
 
         if not message:
             raise MessageNotExistsError()
@@ -154,24 +156,26 @@ class ConversationService:
             )
             conversation.name = name
 
-        db.session.commit()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            conversation = session.merge(conversation)
 
         return conversation
 
     @classmethod
     def get_conversation(cls, app_model: App, conversation_id: str, user: Account | EndUser | None):
-        conversation = db.session.scalar(
-            select(Conversation)
-            .where(
-                Conversation.id == conversation_id,
-                Conversation.app_id == app_model.id,
-                Conversation.from_source == ("api" if isinstance(user, EndUser) else "console"),
-                Conversation.from_end_user_id == (user.id if isinstance(user, EndUser) else None),
-                Conversation.from_account_id == (user.id if isinstance(user, Account) else None),
-                Conversation.is_deleted == False,
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            conversation = session.scalar(
+                select(Conversation)
+                .where(
+                    Conversation.id == conversation_id,
+                    Conversation.app_id == app_model.id,
+                    Conversation.from_source == ("api" if isinstance(user, EndUser) else "console"),
+                    Conversation.from_end_user_id == (user.id if isinstance(user, EndUser) else None),
+                    Conversation.from_account_id == (user.id if isinstance(user, Account) else None),
+                    Conversation.is_deleted == False,
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
 
         if not conversation:
             raise ConversationNotExistsError()
@@ -188,21 +192,16 @@ class ConversationService:
         """
         conversation = cls.get_conversation(app_model, conversation_id, user)
 
-        try:
-            logger.info(
-                "Initiating conversation deletion for app_name %s, conversation_id: %s",
-                app_model.name,
-                conversation_id,
-            )
+        logger.info(
+            "Initiating conversation deletion for app_name %s, conversation_id: %s",
+            app_model.name,
+            conversation_id,
+        )
 
-            db.session.delete(conversation)
-            db.session.commit()
+        with sessionmaker(bind=db.engine).begin() as session:
+            session.delete(session.merge(conversation))
 
-            delete_conversation_related_data.delay(conversation.id)
-
-        except Exception as e:
-            db.session.rollback()
-            raise e
+        delete_conversation_related_data.delay(conversation.id)
 
     @classmethod
     def get_conversational_variable(

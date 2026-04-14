@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from core.extension.api_based_extension_requestor import APIBasedExtensionRequestor
 from core.helper.encrypter import decrypt_token, encrypt_token
@@ -9,13 +10,14 @@ from models.api_based_extension import APIBasedExtension, APIBasedExtensionPoint
 class APIBasedExtensionService:
     @staticmethod
     def get_all_by_tenant_id(tenant_id: str) -> list[APIBasedExtension]:
-        extension_list = list(
-            db.session.scalars(
-                select(APIBasedExtension)
-                .where(APIBasedExtension.tenant_id == tenant_id)
-                .order_by(APIBasedExtension.created_at.desc())
-            ).all()
-        )
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            extension_list = list(
+                session.scalars(
+                    select(APIBasedExtension)
+                    .where(APIBasedExtension.tenant_id == tenant_id)
+                    .order_by(APIBasedExtension.created_at.desc())
+                ).all()
+            )
 
         for extension in extension_list:
             extension.api_key = decrypt_token(extension.tenant_id, extension.api_key)
@@ -28,27 +30,28 @@ class APIBasedExtensionService:
 
         extension_data.api_key = encrypt_token(extension_data.tenant_id, extension_data.api_key)
 
-        db.session.add(extension_data)
-        db.session.commit()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            session.add(extension_data)
         return extension_data
 
     @staticmethod
     def delete(extension_data: APIBasedExtension):
-        db.session.delete(extension_data)
-        db.session.commit()
+        with sessionmaker(bind=db.engine).begin() as session:
+            session.delete(session.merge(extension_data))
 
     @staticmethod
     def get_with_tenant_id(tenant_id: str, api_based_extension_id: str) -> APIBasedExtension:
-        extension = db.session.scalar(
-            select(APIBasedExtension)
-            .where(APIBasedExtension.tenant_id == tenant_id, APIBasedExtension.id == api_based_extension_id)
-            .limit(1)
-        )
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            extension = session.scalar(
+                select(APIBasedExtension)
+                .where(APIBasedExtension.tenant_id == tenant_id, APIBasedExtension.id == api_based_extension_id)
+                .limit(1)
+            )
 
-        if not extension:
-            raise ValueError("API based extension is not found")
+            if not extension:
+                raise ValueError("API based extension is not found")
 
-        extension.api_key = decrypt_token(extension.tenant_id, extension.api_key)
+            extension.api_key = decrypt_token(extension.tenant_id, extension.api_key)
 
         return extension
 
@@ -58,33 +61,34 @@ class APIBasedExtensionService:
         if not extension_data.name:
             raise ValueError("name must not be empty")
 
-        if not extension_data.id:
-            # case one: check new data, name must be unique
-            is_name_existed = db.session.scalar(
-                select(APIBasedExtension)
-                .where(
-                    APIBasedExtension.tenant_id == extension_data.tenant_id,
-                    APIBasedExtension.name == extension_data.name,
+        with sessionmaker(bind=db.engine).begin() as session:
+            if not extension_data.id:
+                # case one: check new data, name must be unique
+                is_name_existed = session.scalar(
+                    select(APIBasedExtension)
+                    .where(
+                        APIBasedExtension.tenant_id == extension_data.tenant_id,
+                        APIBasedExtension.name == extension_data.name,
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
 
-            if is_name_existed:
-                raise ValueError("name must be unique, it is already existed")
-        else:
-            # case two: check existing data, name must be unique
-            is_name_existed = db.session.scalar(
-                select(APIBasedExtension)
-                .where(
-                    APIBasedExtension.tenant_id == extension_data.tenant_id,
-                    APIBasedExtension.name == extension_data.name,
-                    APIBasedExtension.id != extension_data.id,
+                if is_name_existed:
+                    raise ValueError("name must be unique, it is already existed")
+            else:
+                # case two: check existing data, name must be unique
+                is_name_existed = session.scalar(
+                    select(APIBasedExtension)
+                    .where(
+                        APIBasedExtension.tenant_id == extension_data.tenant_id,
+                        APIBasedExtension.name == extension_data.name,
+                        APIBasedExtension.id != extension_data.id,
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
 
-            if is_name_existed:
-                raise ValueError("name must be unique, it is already existed")
+                if is_name_existed:
+                    raise ValueError("name must be unique, it is already existed")
 
         # api_endpoint
         if not extension_data.api_endpoint:
