@@ -134,7 +134,8 @@ class WorkflowService:
                 Workflow.version == Workflow.VERSION_DRAFT,
             )
         )
-        return db.session.execute(stmt).scalar_one()
+        with sessionmaker(bind=db.engine).begin() as session:
+            return session.execute(stmt).scalar_one()
 
     def get_draft_workflow(self, app_model: App, workflow_id: str | None = None) -> Workflow | None:
         """
@@ -143,15 +144,16 @@ class WorkflowService:
         if workflow_id:
             return self.get_published_workflow_by_id(app_model, workflow_id)
         # fetch draft workflow by app_model
-        workflow = db.session.scalar(
-            select(Workflow)
-            .where(
-                Workflow.tenant_id == app_model.tenant_id,
-                Workflow.app_id == app_model.id,
-                Workflow.version == Workflow.VERSION_DRAFT,
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            workflow = session.scalar(
+                select(Workflow)
+                .where(
+                    Workflow.tenant_id == app_model.tenant_id,
+                    Workflow.app_id == app_model.id,
+                    Workflow.version == Workflow.VERSION_DRAFT,
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
 
         # return draft workflow
         return workflow
@@ -160,15 +162,16 @@ class WorkflowService:
         """
         fetch published workflow by workflow_id
         """
-        workflow = db.session.scalar(
-            select(Workflow)
-            .where(
-                Workflow.tenant_id == app_model.tenant_id,
-                Workflow.app_id == app_model.id,
-                Workflow.id == workflow_id,
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            workflow = session.scalar(
+                select(Workflow)
+                .where(
+                    Workflow.tenant_id == app_model.tenant_id,
+                    Workflow.app_id == app_model.id,
+                    Workflow.id == workflow_id,
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
         if not workflow:
             return None
         if workflow.version == Workflow.VERSION_DRAFT:
@@ -187,15 +190,16 @@ class WorkflowService:
             return None
 
         # fetch published workflow by workflow_id
-        workflow = db.session.scalar(
-            select(Workflow)
-            .where(
-                Workflow.tenant_id == app_model.tenant_id,
-                Workflow.app_id == app_model.id,
-                Workflow.id == app_model.workflow_id,
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            workflow = session.scalar(
+                select(Workflow)
+                .where(
+                    Workflow.tenant_id == app_model.tenant_id,
+                    Workflow.app_id == app_model.id,
+                    Workflow.id == app_model.workflow_id,
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
 
         return workflow
 
@@ -265,30 +269,29 @@ class WorkflowService:
         self.validate_graph_structure(graph=graph)
 
         # create draft workflow if not found
-        if not workflow:
-            workflow = Workflow(
-                tenant_id=app_model.tenant_id,
-                app_id=app_model.id,
-                type=WorkflowType.from_app_mode(app_model.mode).value,
-                version=Workflow.VERSION_DRAFT,
-                graph=json.dumps(graph),
-                features=json.dumps(features),
-                created_by=account.id,
-                environment_variables=environment_variables,
-                conversation_variables=conversation_variables,
-            )
-            db.session.add(workflow)
-        # update draft workflow if found
-        else:
-            workflow.graph = json.dumps(graph)
-            workflow.features = json.dumps(features)
-            workflow.updated_by = account.id
-            workflow.updated_at = naive_utc_now()
-            workflow.environment_variables = environment_variables
-            workflow.conversation_variables = conversation_variables
-
-        # commit db session changes
-        db.session.commit()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            if not workflow:
+                workflow = Workflow(
+                    tenant_id=app_model.tenant_id,
+                    app_id=app_model.id,
+                    type=WorkflowType.from_app_mode(app_model.mode).value,
+                    version=Workflow.VERSION_DRAFT,
+                    graph=json.dumps(graph),
+                    features=json.dumps(features),
+                    created_by=account.id,
+                    environment_variables=environment_variables,
+                    conversation_variables=conversation_variables,
+                )
+                session.add(workflow)
+            # update draft workflow if found
+            else:
+                workflow = session.merge(workflow)
+                workflow.graph = json.dumps(graph)
+                workflow.features = json.dumps(features)
+                workflow.updated_by = account.id
+                workflow.updated_at = naive_utc_now()
+                workflow.environment_variables = environment_variables
+                workflow.conversation_variables = conversation_variables
 
         # trigger app workflow events
         app_draft_workflow_was_synced.send(app_model, synced_draft_workflow=workflow)
@@ -325,10 +328,12 @@ class WorkflowService:
             updated_at_factory=naive_utc_now,
         )
 
-        if is_new_draft:
-            db.session.add(draft_workflow)
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            if is_new_draft:
+                session.add(draft_workflow)
+            else:
+                draft_workflow = session.merge(draft_workflow)
 
-        db.session.commit()
         app_draft_workflow_was_synced.send(app_model, synced_draft_workflow=draft_workflow)
 
         return draft_workflow
@@ -549,15 +554,16 @@ class WorkflowService:
 
             # Use the same fallback logic as runtime: get the first available credential
             # ordered by is_default DESC, created_at ASC (same as tool_manager.py)
-            default_provider = db.session.scalar(
-                select(BuiltinToolProvider)
-                .where(
-                    BuiltinToolProvider.tenant_id == tenant_id,
-                    BuiltinToolProvider.provider == provider,
+            with sessionmaker(bind=db.engine).begin() as session:
+                default_provider = session.scalar(
+                    select(BuiltinToolProvider)
+                    .where(
+                        BuiltinToolProvider.tenant_id == tenant_id,
+                        BuiltinToolProvider.provider == provider,
+                    )
+                    .order_by(BuiltinToolProvider.is_default.desc(), BuiltinToolProvider.created_at.asc())
+                    .limit(1)
                 )
-                .order_by(BuiltinToolProvider.is_default.desc(), BuiltinToolProvider.created_at.asc())
-                .limit(1)
-            )
 
             if not default_provider:
                 # plugin does not require credentials, skip

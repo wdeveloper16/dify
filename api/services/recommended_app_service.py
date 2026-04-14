@@ -1,6 +1,7 @@
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from configs import dify_config
 from extensions.ext_database import db
@@ -31,11 +32,9 @@ class RecommendedAppService:
             apps = result["recommended_apps"]
             for app in apps:
                 app_id = app["app_id"]
-                trial_app_model = db.session.scalar(select(TrialApp).where(TrialApp.app_id == app_id).limit(1))
-                if trial_app_model:
-                    app["can_trial"] = True
-                else:
-                    app["can_trial"] = False
+                with sessionmaker(bind=db.engine).begin() as session:
+                    trial_app_model = session.scalar(select(TrialApp).where(TrialApp.app_id == app_id).limit(1))
+                app["can_trial"] = trial_app_model is not None
         return result
 
     @classmethod
@@ -50,11 +49,9 @@ class RecommendedAppService:
         result: dict[str, Any] = retrieval_instance.get_recommend_app_detail(app_id)
         if FeatureService.get_system_features().enable_trial_app:
             app_id = result["id"]
-            trial_app_model = db.session.scalar(select(TrialApp).where(TrialApp.app_id == app_id).limit(1))
-            if trial_app_model:
-                result["can_trial"] = True
-            else:
-                result["can_trial"] = False
+            with sessionmaker(bind=db.engine).begin() as session:
+                trial_app_model = session.scalar(select(TrialApp).where(TrialApp.app_id == app_id).limit(1))
+            result["can_trial"] = trial_app_model is not None
         return result
 
     @classmethod
@@ -64,14 +61,13 @@ class RecommendedAppService:
         :param app_id: app id
         :return:
         """
-        account_trial_app_record = db.session.scalar(
-            select(AccountTrialAppRecord)
-            .where(AccountTrialAppRecord.app_id == app_id, AccountTrialAppRecord.account_id == account_id)
-            .limit(1)
-        )
-        if account_trial_app_record:
-            account_trial_app_record.count += 1
-            db.session.commit()
-        else:
-            db.session.add(AccountTrialAppRecord(app_id=app_id, count=1, account_id=account_id))
-            db.session.commit()
+        with sessionmaker(bind=db.engine).begin() as session:
+            account_trial_app_record = session.scalar(
+                select(AccountTrialAppRecord)
+                .where(AccountTrialAppRecord.app_id == app_id, AccountTrialAppRecord.account_id == account_id)
+                .limit(1)
+            )
+            if account_trial_app_record:
+                account_trial_app_record.count += 1
+            else:
+                session.add(AccountTrialAppRecord(app_id=app_id, count=1, account_id=account_id))
