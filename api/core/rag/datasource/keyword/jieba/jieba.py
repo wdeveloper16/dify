@@ -4,6 +4,7 @@ from typing import Any, TypedDict
 import orjson
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from configs import dify_config
 from core.rag.datasource.keyword.jieba.jieba_keyword_table_handler import JiebaKeywordTableHandler
@@ -102,7 +103,8 @@ class Jieba(BaseKeyword):
         if document_ids_filter:
             segment_query_stmt = segment_query_stmt.where(DocumentSegment.document_id.in_(document_ids_filter))
 
-        segments = db.session.scalars(segment_query_stmt).all()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            segments = session.scalars(segment_query_stmt).all()
         segment_map = {segment.index_node_id: segment for segment in segments}
         for chunk_index in sorted_chunk_indices:
             segment = segment_map.get(chunk_index)
@@ -127,8 +129,8 @@ class Jieba(BaseKeyword):
         with redis_client.lock(lock_name, timeout=600):
             dataset_keyword_table = self.dataset.dataset_keyword_table
             if dataset_keyword_table:
-                db.session.delete(dataset_keyword_table)
-                db.session.commit()
+                with sessionmaker(bind=db.engine).begin() as session:
+                    session.delete(session.merge(dataset_keyword_table))
                 if dataset_keyword_table.data_source_type != "database":
                     file_key = "keyword_files/" + self.dataset.tenant_id + "/" + self.dataset.id + ".txt"
                     storage.delete(file_key)
@@ -141,8 +143,9 @@ class Jieba(BaseKeyword):
         dataset_keyword_table = self.dataset.dataset_keyword_table
         keyword_data_source_type = dataset_keyword_table.data_source_type
         if keyword_data_source_type == "database":
-            dataset_keyword_table.keyword_table = dumps_with_sets(keyword_table_dict)
-            db.session.commit()
+            with sessionmaker(bind=db.engine).begin() as session:
+                tbl = session.merge(dataset_keyword_table)
+                tbl.keyword_table = dumps_with_sets(keyword_table_dict)
         else:
             file_key = "keyword_files/" + self.dataset.tenant_id + "/" + self.dataset.id + ".txt"
             if storage.exists(file_key):
@@ -169,8 +172,8 @@ class Jieba(BaseKeyword):
                         "__data__": {"index_id": self.dataset.id, "summary": None, "table": {}},
                     }
                 )
-            db.session.add(dataset_keyword_table)
-            db.session.commit()
+            with sessionmaker(bind=db.engine).begin() as session:
+                session.add(dataset_keyword_table)
 
         return {}
 
@@ -223,11 +226,11 @@ class Jieba(BaseKeyword):
         stmt = select(DocumentSegment).where(
             DocumentSegment.dataset_id == dataset_id, DocumentSegment.index_node_id == node_id
         )
-        document_segment = db.session.scalar(stmt)
-        if document_segment:
-            document_segment.keywords = keywords
-            db.session.add(document_segment)
-            db.session.commit()
+        with sessionmaker(bind=db.engine).begin() as session:
+            document_segment = session.scalar(stmt)
+            if document_segment:
+                document_segment.keywords = keywords
+                session.add(document_segment)
 
     def create_segment_keywords(self, node_id: str, keywords: list[str]):
         keyword_table = self._get_dataset_keyword_table()

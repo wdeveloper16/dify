@@ -6,6 +6,7 @@ import uuid
 from typing import Any, TypedDict
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import sessionmaker
 
 from configs import dify_config
 from core.db.session_factory import session_factory
@@ -183,15 +184,16 @@ class ParentChildIndexProcessor(BaseIndexProcessor):
                     child_node_ids = precomputed_child_node_ids
                 else:
                     # Fallback to original query (may fail if segments are already deleted)
-                    rows = db.session.execute(
-                        select(ChildChunk.index_node_id)
-                        .join(DocumentSegment, ChildChunk.segment_id == DocumentSegment.id)
-                        .where(
-                            DocumentSegment.dataset_id == dataset.id,
-                            DocumentSegment.index_node_id.in_(node_ids),
-                            ChildChunk.dataset_id == dataset.id,
-                        )
-                    ).all()
+                    with sessionmaker(bind=db.engine).begin() as session:
+                        rows = session.execute(
+                            select(ChildChunk.index_node_id)
+                            .join(DocumentSegment, ChildChunk.segment_id == DocumentSegment.id)
+                            .where(
+                                DocumentSegment.dataset_id == dataset.id,
+                                DocumentSegment.index_node_id.in_(node_ids),
+                                ChildChunk.dataset_id == dataset.id,
+                            )
+                        ).all()
                     child_node_ids = [row[0] for row in rows if row[0]]
 
                 # Delete from vector index
@@ -200,23 +202,23 @@ class ParentChildIndexProcessor(BaseIndexProcessor):
 
                 # Delete from database
                 if delete_child_chunks and child_node_ids:
-                    db.session.execute(
-                        delete(ChildChunk).where(
-                            ChildChunk.dataset_id == dataset.id, ChildChunk.index_node_id.in_(child_node_ids)
+                    with sessionmaker(bind=db.engine).begin() as session:
+                        session.execute(
+                            delete(ChildChunk).where(
+                                ChildChunk.dataset_id == dataset.id, ChildChunk.index_node_id.in_(child_node_ids)
+                            )
                         )
-                    )
-                    db.session.commit()
             else:
                 vector.delete()
 
                 if delete_child_chunks:
                     # Use existing compound index: (tenant_id, dataset_id, ...)
-                    db.session.execute(
-                        delete(ChildChunk).where(
-                            ChildChunk.tenant_id == dataset.tenant_id, ChildChunk.dataset_id == dataset.id
+                    with sessionmaker(bind=db.engine).begin() as session:
+                        session.execute(
+                            delete(ChildChunk).where(
+                                ChildChunk.tenant_id == dataset.tenant_id, ChildChunk.dataset_id == dataset.id
+                            )
                         )
-                    )
-                    db.session.commit()
 
     def retrieve(
         self,
@@ -333,10 +335,10 @@ class ParentChildIndexProcessor(BaseIndexProcessor):
                 ),
                 created_by=document.created_by,
             )
-            db.session.add(dataset_process_rule)
-            db.session.flush()
-            document.dataset_process_rule_id = dataset_process_rule.id
-            db.session.commit()
+            with sessionmaker(bind=db.engine).begin() as session:
+                session.add(dataset_process_rule)
+                session.flush()
+                document.dataset_process_rule_id = dataset_process_rule.id
             # save node to document segment
             doc_store = DatasetDocumentStore(dataset=dataset, user_id=document.created_by, document_id=document.id)
             # add document segments

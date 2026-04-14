@@ -18,6 +18,7 @@ from graphon.model_runtime.entities.message_entities import (
 )
 from graphon.model_runtime.entities.model_entities import ModelFeature, ModelType
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from core.app.file_access import DatabaseFileAccessController
 from core.app.llm import deduct_llm_quota
@@ -151,12 +152,13 @@ class ParagraphIndexProcessor(BaseIndexProcessor):
         if delete_summaries:
             if node_ids:
                 # Find segments by index_node_id
-                segments = db.session.scalars(
-                    select(DocumentSegment).where(
-                        DocumentSegment.dataset_id == dataset.id,
-                        DocumentSegment.index_node_id.in_(node_ids),
-                    )
-                ).all()
+                with sessionmaker(bind=db.engine).begin() as session:
+                    segments = session.scalars(
+                        select(DocumentSegment).where(
+                            DocumentSegment.dataset_id == dataset.id,
+                            DocumentSegment.index_node_id.in_(node_ids),
+                        )
+                    ).all()
                 segment_ids = [segment.id for segment in segments]
                 if segment_ids:
                     SummaryIndexService.delete_summaries_for_segments(dataset, segment_ids)
@@ -542,9 +544,10 @@ class ParagraphIndexProcessor(BaseIndexProcessor):
 
         # Get unique IDs for database query
         unique_upload_file_ids = list(set(upload_file_id_list))
-        upload_files = db.session.scalars(
-            select(UploadFile).where(UploadFile.id.in_(unique_upload_file_ids), UploadFile.tenant_id == tenant_id)
-        ).all()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            upload_files = session.scalars(
+                select(UploadFile).where(UploadFile.id.in_(unique_upload_file_ids), UploadFile.tenant_id == tenant_id)
+            ).all()
 
         # Create File objects from UploadFile records
         file_objects = []
@@ -588,14 +591,15 @@ class ParagraphIndexProcessor(BaseIndexProcessor):
         from sqlalchemy import select
 
         # Query attachments from SegmentAttachmentBinding table
-        attachments_with_bindings = db.session.execute(
-            select(SegmentAttachmentBinding, UploadFile)
-            .join(UploadFile, UploadFile.id == SegmentAttachmentBinding.attachment_id)
-            .where(
-                SegmentAttachmentBinding.segment_id == segment_id,
-                SegmentAttachmentBinding.tenant_id == tenant_id,
-            )
-        ).all()
+        with sessionmaker(db.engine, expire_on_commit=False).begin() as session:
+            attachments_with_bindings = session.execute(
+                select(SegmentAttachmentBinding, UploadFile)
+                .join(UploadFile, UploadFile.id == SegmentAttachmentBinding.attachment_id)
+                .where(
+                    SegmentAttachmentBinding.segment_id == segment_id,
+                    SegmentAttachmentBinding.tenant_id == tenant_id,
+                )
+            ).all()
 
         if not attachments_with_bindings:
             return []
